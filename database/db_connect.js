@@ -7,6 +7,15 @@ var config = {
   options: {
     trustedConnection: true,
     encrypt: false,
+    enableArithAbort: true,
+    requestTimeout: 180000,
+    idleTimeoutMillis: 180000,
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 180000, // Set pool idle timeout to 60 seconds
+    acquireTimeoutMillis: 180000, // Set pool acquire timeout to 60 seconds
   },
 };
 
@@ -19,6 +28,15 @@ var config1 = {
   options: {
     trustedConnection: true,
     encrypt: false,
+    enableArithAbort: true,
+    requestTimeout: 180000,
+    idleTimeoutMillis: 180000,
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 180000, // Set pool idle timeout to 60 seconds
+    acquireTimeoutMillis: 180000, // Set pool acquire timeout to 60 seconds
   },
 };
 
