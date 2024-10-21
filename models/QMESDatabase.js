@@ -4,17 +4,21 @@ var sql = require("mssql");
 const pool1 = new sql.ConnectionPool(config1);
 const poolConnect1 = pool1.connect();
 
-const dailyKnittingIncentiveDay = async () => {
+const dailyKnittingIncentiveDay = async (date) => {
   await poolConnect1;
 
   const request = pool1.request();
 
-  let sqlQuery = `SELECT distinct
+  let sqlQuery;
+
+  // auto generate everyday
+  let autoSqlQuery = `SELECT distinct
   a.Module,
   a.Line,
   a.EmployeeCode,
   a.EmployeeName,
   a.MCCount,
+  a.ChangeOverMachine,
   a.StyleName,
   a.Size,
   a.UsedQty,
@@ -27,6 +31,7 @@ FROM (
       eo.EmployeeCode,
       et.EmployeeName,
       ic.MCCount,
+      ic.ChangeOverMachine,
       st.StyleName,
       mb.Size,
       eo.UsedQty,
@@ -61,7 +66,70 @@ FROM (
       AND ic.Shift = 'Day'
 ) a 
 WHERE a.Shift = 'Day Shift'`;
+
+  let manualSqlQuery = `SELECT distinct
+a.Module,
+a.Line,
+a.EmployeeCode,
+a.EmployeeName,
+a.MCCount,
+a.ChangeOverMachine,
+a.StyleName,
+a.Size,
+a.UsedQty,
+a.Shift,
+a.ShiftDate
+FROM (
+SELECT  
+    ic.Module,
+    ic.Line,
+    eo.EmployeeCode,
+    et.EmployeeName,
+    ic.MCCount,
+    ic.ChangeOverMachine,
+    st.StyleName,
+    mb.Size,
+    eo.UsedQty,
+    CASE 
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '09:00' AND '20:59' THEN 'Day Shift'
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '21:00' AND '23:59' THEN 'Night Shift'
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '00:00' AND '08:59' THEN 'Night Shift'
+        ELSE 'None'
+    END AS [Shift],
+    CASE 
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '09:00' AND '20:59' THEN eo.[CreatedDate]
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '21:00' AND '23:59' THEN DATEADD(DAY, 0, CAST(eo.[CreatedDate] AS DATE))
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '00:00' AND '08:59' THEN eo.[CreatedDate]
+        ELSE NULL
+    END AS [ShiftDate]
+FROM 
+    IncentiveDB..IncentiveOperationScanTableKnitting eo
+INNER JOIN 
+    IncentiveDB..EmployeeTableKnitting et ON et.EmployeeCode = eo.EmployeeCode
+INNER JOIN 
+    PMSCelsiusDB..BarcodeGenarationTable gb ON eo.BarcodeNo = gb.BarcodePrimaryKey
+INNER JOIN 
+    PMSCelsiusDB..MasterBarcodeGenaration mb ON gb.MasterGenarationId = mb.MasterGenarationId
+INNER JOIN 
+    PMSCelsiusDB..Style_table st ON st.StyleId = mb.StyleNo
+INNER JOIN 
+    IncentiveDB..IncentiveMachineCount ic ON ic.OperatorID = et.EmployeeCode
+WHERE 
+    Designation != 'IT' 
+    AND CONVERT(DATE, eo.[CreatedDate]) = convert(nvarchar,'${date}',23)
+    AND ic.Date = CONVERT(VARCHAR, DAY('${date}')) + '-' + LEFT(DATENAME(MONTH, '${date}'), 3) + '-' + RIGHT(YEAR('${date}'), 2)
+    AND ic.Shift = 'Day'
+) a 
+WHERE a.Shift = 'Day Shift'`;
   //   console.log(sqlQuery);
+
+  if (date) {
+    sqlQuery = manualSqlQuery;
+  } else {
+    sqlQuery = autoSqlQuery;
+  }
+
+  // console.log(sqlQuery);
 
   return new Promise((resolve, reject) => {
     request.query(sqlQuery, async function (err, result) {
@@ -78,17 +146,20 @@ WHERE a.Shift = 'Day Shift'`;
   });
 };
 
-const dailyKnittingIncentiveNight = async () => {
+const dailyKnittingIncentiveNight = async (date) => {
   await poolConnect1;
 
   const request = pool1.request();
 
-  let sqlQuery = `SELECT distinct
+  let sqlQuery;
+
+  let autoSqlQuery = `SELECT distinct
   a.Module,
   a.Line,
   a.EmployeeCode,
   a.EmployeeName,
   a.MCCount,
+  a.ChangeOverMachine,
   a.StyleName,
   a.Size,
   a.UsedQty,
@@ -101,6 +172,7 @@ FROM (
       eo.EmployeeCode,
       et.EmployeeName,
       ic.MCCount,
+      ic.ChangeOverMachine,
       st.StyleName,
       mb.Size,
       eo.UsedQty,
@@ -135,7 +207,69 @@ FROM (
       AND ic.Shift = 'Night'
 ) a 
 WHERE a.Shift = 'Night Shift'`;
-  //   console.log(sqlQuery);
+
+  let manualSqlQuery = `SELECT distinct
+a.Module,
+a.Line,
+a.EmployeeCode,
+a.EmployeeName,
+a.MCCount,
+a.ChangeOverMachine,
+a.StyleName,
+a.Size,
+a.UsedQty,
+a.Shift,
+CASE WHEN a.Shift = 'Night Shift' THEN DATEADD(day, -1, a.ShiftDate) ELSE a.ShiftDate END ShiftDate
+FROM (
+SELECT  
+    ic.Module,
+    ic.Line,
+    eo.EmployeeCode,
+    et.EmployeeName,
+    ic.MCCount,
+    ic.ChangeOverMachine,
+    st.StyleName,
+    mb.Size,
+    eo.UsedQty,
+    CASE 
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '09:00' AND '20:59' THEN 'Day Shift'
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '21:00' AND '23:59' THEN 'Night Shift'
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '00:00' AND '08:59' THEN 'Night Shift'
+        ELSE 'None'
+    END AS [Shift],
+    CASE 
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '09:00' AND '20:59' THEN eo.[CreatedDate]
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '21:00' AND '23:59' THEN DATEADD(DAY, 0, CAST(eo.[CreatedDate] AS DATE))
+        WHEN CONVERT(VARCHAR(5), eo.[CreatedDate], 108) BETWEEN '00:00' AND '08:59' THEN eo.[CreatedDate]
+        ELSE NULL
+    END AS [ShiftDate]
+FROM 
+    IncentiveDB..IncentiveOperationScanTableKnitting eo
+INNER JOIN 
+    IncentiveDB..EmployeeTableKnitting et ON et.EmployeeCode = eo.EmployeeCode
+INNER JOIN 
+    PMSCelsiusDB..BarcodeGenarationTable gb ON eo.BarcodeNo = gb.BarcodePrimaryKey
+INNER JOIN 
+    PMSCelsiusDB..MasterBarcodeGenaration mb ON gb.MasterGenarationId = mb.MasterGenarationId
+INNER JOIN 
+    PMSCelsiusDB..Style_table st ON st.StyleId = mb.StyleNo
+INNER JOIN 
+    IncentiveDB..IncentiveMachineCount ic ON ic.OperatorID = et.EmployeeCode
+WHERE 
+    Designation != 'IT' 
+    AND CONVERT(DATE, eo.[CreatedDate]) = convert(nvarchar,DATEADD(day, 1, '${date}'),23)
+    AND ic.Date = CONVERT(VARCHAR, DAY(DATEADD(day, 1, '${date}'))) + '-' + LEFT(DATENAME(MONTH, DATEADD(day, 1, '${date}')), 3) + '-' + RIGHT(YEAR(DATEADD(day, 1, '${date}')), 2)
+    AND ic.Shift = 'Night'
+) a 
+WHERE a.Shift = 'Night Shift'`;
+
+  if (date) {
+    sqlQuery = manualSqlQuery;
+  } else {
+    sqlQuery = autoSqlQuery;
+  }
+
+  console.log(sqlQuery);
 
   return new Promise((resolve, reject) => {
     request.query(sqlQuery, async function (err, result) {

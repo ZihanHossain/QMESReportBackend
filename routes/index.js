@@ -197,7 +197,7 @@ router.post(
 
 const attendanceKnittingstorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "E:/Zihan/QMESReport/Files");
+    cb(null, "E:/Zihan/QMESReports/Files");
   },
   filename: (req, file, cb) => {
     cb(null, "attendanceKnitting.xlsx");
@@ -252,6 +252,92 @@ router.post(
     res.status(200).send("File uploaded successfully.");
   }
 );
+
+const plannedEfficiencyStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "E:/QMESReports/Files");
+  },
+  filename: (req, file, cb) => {
+    cb(null, "plannedEfficiency.xlsx");
+  },
+});
+
+const plannedEfficiencyUpload = multer({ storage: plannedEfficiencyStorage });
+
+router.post(
+  "/uploadPlannedEfficiency",
+  plannedEfficiencyUpload.single("file"),
+  (req, res) => {
+    if (!req.file) {
+      return res.status(400).send("No file uploaded.");
+    }
+
+    const workbook = xlsx.readFile(req.file.path);
+    const sheet_name_list = workbook.SheetNames;
+    const worksheet = workbook.Sheets[sheet_name_list[0]];
+
+    const jsonData = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+    const headers = jsonData[0]; // First row (header)
+
+    res.status(200).send("File uploaded successfully.");
+  }
+);
+
+router.get("/export_planned_efficiency", async function (req, res, next) {
+  try {
+    await poolConnect;
+
+    const request = pool.request();
+
+    // Path to your Excel file
+    const filePath = "E:/QMESReports/Files/plannedEfficiency.xlsx";
+
+    // Read the Excel file
+    const workbook = xlsx.readFile(filePath);
+
+    // Get the first sheet name
+    const sheetName = workbook.SheetNames[0];
+
+    // Get the first sheet
+    const sheet = workbook.Sheets[sheetName];
+
+    // Convert sheet to JSON format
+    const data = xlsx.utils.sheet_to_json(sheet);
+    // console.log(sheetName);
+
+    // Output the data
+    // console.log(data);
+    const promises = [];
+
+    data.forEach((element) => {
+      let date = formatDate(excelDateToJSDate(element.Date));
+
+      let sqlQuery = `
+        MERGE INTO KnittingPlannedEfficiency AS target
+        USING (VALUES ('${date}', ${element.EmployeeCode}, '${element.Style}', ${element.MC}, ${element.PlanEfficiency}))
+        AS source (Date, EmployeeCode, Style, MC, PlanEfficiency)
+        ON target.Date = source.Date AND target.EmployeeCode = source.EmployeeCode
+        WHEN MATCHED THEN
+            UPDATE SET MC = source.MC,
+            PlanEfficiency = source.PlanEfficiency
+        WHEN NOT MATCHED THEN
+            INSERT (Date, EmployeeCode, Style, MC, PlanEfficiency) VALUES (source.Date, source.EmployeeCode, source.Style, source.MC, source.PlanEfficiency);
+      `;
+      console.log(sqlQuery);
+      promises.push(
+        request.query(sqlQuery).catch((err) => {
+          console.log(err);
+          throw new Error("error");
+        })
+      );
+    });
+    await Promise.all(promises);
+    res.send("Data inserted successfully");
+  } catch (err) {
+    // console.log(err);
+    res.status(500).send("An error occurred");
+  }
+});
 
 const LinkingSMVstorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -504,7 +590,7 @@ router.get("/export_attendance_knitting", async function (req, res, next) {
     const request = pool.request();
 
     // Path to your Excel file
-    const filePath = "E:/Zihan/QMESReport/Files/attendanceKnitting.xlsx";
+    const filePath = "E:/QMESReports/Files/attendanceKnitting.xlsx";
 
     const workbook = xlsx.readFile(filePath);
 
@@ -660,42 +746,59 @@ router.get("/daily_knitting_incentive_day", async function (req, res, next) {
   }
 });
 
-async function KnittingIncentiveDay() {
+async function KnittingIncentiveDay(date) {
   await poolConnect;
-
   const request = pool.request();
+  let response;
+
   try {
-    const response = await dailyKnittingIncentiveDay();
+    response = date
+      ? await dailyKnittingIncentiveDay(date)
+      : await dailyKnittingIncentiveDay();
+
     let records = 0;
 
-    const promises = response.map((element) => {
-      const sqlQuery = `INSERT INTO KnittingIncentive(Module, Line, EmployeeCode, EmployeeName, MCCount, StyleName, Size, UsedQty, Shift, ShiftDate)
+    return new Promise((resolve, reject) => {
+      let promises = response.map((element) => {
+        const sqlQuery = `INSERT INTO KnittingIncentive(Module, Line, EmployeeCode, EmployeeName, MCCount, StyleName, Size, UsedQty, Shift, ShiftDate, CO)
         VALUES(${element.Module}, ${element.Line}, ${element.EmployeeCode}, '${
-        element.EmployeeName
-      }', ${element.MCCount}, '${element.StyleName}', '${element.Size}', ${
-        element.UsedQty
-      }, '${element.Shift}', '${moment
-        .utc(element.ShiftDate)
-        .format("MM/DD/YYYY HH:mm:ss")}')`;
+          element.EmployeeName
+        }', 
+          ${element.MCCount}, '${element.StyleName}', '${element.Size}', ${
+          element.UsedQty
+        }, 
+          '${element.Shift}', '${moment
+          .utc(element.ShiftDate)
+          .format("MM/DD/YYYY HH:mm:ss")}', ${element.ChangeOverMachine})`;
 
-      return new Promise((resolve, reject) => {
-        request.query(sqlQuery, (err, result) => {
-          if (err) {
-            console.error("Error executing query:", err);
-            reject(err);
-          } else {
-            records = records + result.rowsAffected;
-            resolve(result.rowsAffected);
-          }
+        return new Promise((resolveQuery, rejectQuery) => {
+          request.query(sqlQuery, (err, result) => {
+            if (err) {
+              console.error("Error executing query:", err);
+              rejectQuery(err);
+            } else {
+              records += result.rowsAffected[0];
+              resolveQuery();
+            }
+          });
         });
       });
-    });
 
-    await Promise.all(promises);
-    console.log("KnittingIncentiveDay records pushed: " + records);
+      Promise.all(promises)
+        .then(() => {
+          if (records < response.length) {
+            reject({ status: "error", rowsAffected: records });
+          } else {
+            resolve({ status: "success", rowsAffected: records });
+          }
+        })
+        .catch((err) => {
+          reject({ status: "error", message: err.message });
+        });
+    });
   } catch (error) {
     console.error("Error in KnittingIncentiveDay:", error);
-    throw error; // Rethrow the error to propagate it to the caller
+    throw error; // Rethrow to propagate to caller
   }
 }
 
@@ -707,14 +810,14 @@ router.get("/daily_knitting_incentive_night", async function (req, res, next) {
     const response = await dailyKnittingIncentiveNight();
 
     response.forEach((element) => {
-      let sqlQuery = `INSERT INTO KnittingIncentive(Module, Line, EmployeeCode, EmployeeName, MCCount, StyleName, Size, UsedQty, Shift, ShiftDate)
+      let sqlQuery = `INSERT INTO KnittingIncentive(Module, Line, EmployeeCode, EmployeeName, MCCount, StyleName, Size, UsedQty, Shift, ShiftDate, CO)
       VALUES(${element.Module}, ${element.Line}, ${element.EmployeeCode}, '${
         element.EmployeeName
       }', ${element.MCCount}, '${element.StyleName}', '${element.Size}', ${
         element.UsedQty
       }, '${element.Shift}', '${moment
         .utc(element.ShiftDate)
-        .format("MM/DD/YYYY HH:mm:ss")}')`;
+        .format("MM/DD/YYYY HH:mm:ss")}', ${element.ChangeOverMachine})`;
       return new Promise((resolve, reject) => {
         request.query(sqlQuery, async function (err, result) {
           if (err) {
@@ -732,39 +835,99 @@ router.get("/daily_knitting_incentive_night", async function (req, res, next) {
   }
 });
 
-async function KnittingIncentiveNight() {
-  await poolConnect;
-
+router.post("/deleteKnittingDataByDate", async function (req, res) {
   const request = pool.request();
   try {
-    const response = await dailyKnittingIncentiveNight();
-    let records = 0;
-
-    response.forEach((element) => {
-      let sqlQuery = `INSERT INTO KnittingIncentive(Module, Line, EmployeeCode, EmployeeName, MCCount, StyleName, Size, UsedQty, Shift, ShiftDate)
-      VALUES(${element.Module}, ${element.Line}, ${element.EmployeeCode}, '${
-        element.EmployeeName
-      }', ${element.MCCount}, '${element.StyleName}', '${element.Size}', ${
-        element.UsedQty
-      }, '${element.Shift}', '${moment
-        .utc(element.ShiftDate)
-        .format("MM/DD/YYYY HH:mm:ss")}')`;
-      return new Promise((resolve, reject) => {
-        request.query(sqlQuery, async function (err, result) {
+    let sqlQuery = `DELETE FROM KnittingIncentive
+     WHERE CAST(ShiftDate as date) >= '${req.body.startDate}'
+     AND CAST(ShiftDate as date) <= '${req.body.endDate}'
+    `;
+    console.log(sqlQuery);
+    res.send(
+      await new Promise((resolve, reject) => {
+        request.query(sqlQuery, function (err, result) {
           if (err) {
-            console.log(err);
-            reject("error");
+            reject(err);
           } else {
-            records = records + result.rowsAffected;
             resolve(result.rowsAffected);
           }
         });
-      });
+      })
+    );
+  } catch (error) {
+    console.log(error);
+    return error;
+  }
+});
+
+router.post("/pullKnittingDataByDate", async function (req, res) {
+  try {
+    let res1 = await KnittingIncentiveDay(req.body.date);
+    let res2 = await KnittingIncentiveNight(req.body.date);
+
+    res.status(200).json({
+      dayShift: res1,
+      nightShift: res2,
     });
-    console.log("KnittingIncentiveNight records pushed: " + records);
+  } catch (error) {
+    console.error("Error pulling knitting data:", error);
+    res.status(500).json({ message: "Error pulling knitting data", error });
+  }
+});
+
+async function KnittingIncentiveNight(date) {
+  await poolConnect;
+  const request = pool.request();
+  let response;
+
+  try {
+    response = date
+      ? await dailyKnittingIncentiveNight(date)
+      : await dailyKnittingIncentiveNight();
+
+    let records = 0;
+
+    return new Promise((resolve, reject) => {
+      let promises = response.map((element) => {
+        const sqlQuery = `INSERT INTO KnittingIncentive(Module, Line, EmployeeCode, EmployeeName, MCCount, StyleName, Size, UsedQty, Shift, ShiftDate)
+        VALUES(${element.Module}, ${element.Line}, ${element.EmployeeCode}, '${
+          element.EmployeeName
+        }', 
+          ${element.MCCount}, '${element.StyleName}', '${element.Size}', ${
+          element.UsedQty
+        }, 
+          '${element.Shift}', '${moment
+          .utc(element.ShiftDate)
+          .format("MM/DD/YYYY HH:mm:ss")}')`;
+
+        return new Promise((resolveQuery, rejectQuery) => {
+          request.query(sqlQuery, (err, result) => {
+            if (err) {
+              console.error("Error executing query:", err);
+              rejectQuery(err);
+            } else {
+              records += result.rowsAffected[0];
+              resolveQuery();
+            }
+          });
+        });
+      });
+
+      Promise.all(promises)
+        .then(() => {
+          if (records < response.length) {
+            reject({ status: "error", rowsAffected: records });
+          } else {
+            resolve({ status: "success", rowsAffected: records });
+          }
+        })
+        .catch((err) => {
+          reject({ status: "error", message: err.message });
+        });
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).send("Internal Server Error");
+    throw error;
   }
 }
 
@@ -1014,7 +1177,7 @@ rule.minute = 10;
 
 // Define the schedule job
 const job = schedule.scheduleJob(rule, function () {
-  executeJob();
+  // executeJob();
 });
 
 module.exports = router;
